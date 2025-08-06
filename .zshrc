@@ -3,23 +3,7 @@
 # === PATH ===
 export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$HOME/SOFT:$PATH
 unsetopt AUTO_NAME_DIRS
-
-# === ANTIGEN PLUGINS  ===
-source $HOME/SOFT/antigen.zsh
-antigen use oh-my-zsh
-antigen bundle thefuck
-antigen bundle zsh-users/zsh-autosuggestions
-antigen bundle jocelynmallon/zshmarks
-antigen apply
-antigen theme robbyrussell
-
-# === END ANTIGEN PLUGINS  ===
-
-# Uncomment the following line to use case-sensitive completion.
-# CASE_SENSITIVE="true"
-# Uncomment the following line to use hyphen-insensitive completion.
-# Case-sensitive completion must be off. _ and - will be interchangeable.
-# HYPHEN_INSENSITIVE="true"
+ZIM_HOME=~/.zim
 
 zstyle ':omz:update' mode reminder  # just remind me to update when it's time
 zstyle ':omz:update' frequency 13
@@ -33,23 +17,6 @@ ENABLE_CORRECTION="true" # Uncomment the following line to enable command auto-c
 # much, much faster.
 # DISABLE_UNTRACKED_FILES_DIRTY="true"
 
-# HIST_STAMPS="mm/dd/yyyy"
-# ===== MY CONFIG =====
-
-# export MANPATH="/usr/local/man:$MANPATH"
-# You may need to manually set your language environment
-# export LANG=en_US.UTF-8
-
-# Preferred editor for local and remote sessions
-# if [[ -n $SSH_CONNECTION ]]; then
-#   export EDITOR='vim'
-# else
-#   export EDITOR='nvim'
-# fi
-
-# Compilation flags
-# export ARCHFLAGS="-arch $(uname -m)"
-
 
 # === MY  FUNCTIONS and SETTINGS  ====
 
@@ -62,7 +29,7 @@ function virtualenv_info() {
     fi
 }
 
-autoload -Uz compinit && compinit
+# autoload -Uz compinit && compinit
 fpath=(~/.zsh/functions/bookmarks $fpath)
 
 # Autoload the common function and the bookmark functions.
@@ -102,6 +69,24 @@ zstyle ':completion:*' expand prefix suffix
 
 # FUZZY FINDER for HISTORY
 [[ -f ~/.fzf.zsh ]] && source ~/.fzf.zsh
+
+# # === ZIMFW ===
+
+# Download zimfw plugin manager if missing.
+if [[ ! -e ${ZIM_HOME}/zimfw.zsh ]]; then
+  curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh \
+      https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh
+fi
+
+# Install missing modules and update ${ZIM_HOME}/init.zsh if missing or outdated.
+if [[ ! ${ZIM_HOME}/init.zsh -nt ${ZDOTDIR:-${HOME}}/.zimrc ]]; then
+  source ${ZIM_HOME}/zimfw.zsh init -q
+fi
+
+# Initialize modules.
+source ${ZIM_HOME}/init.zsh
+
+# === END ZIMFW ===antidote load
 
 # CUSTOM PROMPT
 eval "$(starship init zsh)"
