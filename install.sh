@@ -31,7 +31,12 @@ IFS=$'\n\t'
 
 REPO_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_INSTALL_DIR="${INSTALL_DIR:-$HOME/soft}"
-MICRO_VERSION="${MICRO_VERSION:-2.0.14}"
+# Leave versions blank to auto-resolve latest from GitHub releases (can override via env)
+MICRO_VERSION="${MICRO_VERSION:-}"
+ZELLIJ_VERSION="${ZELLIJ_VERSION:-}"
+STARSHIP_VERSION="${STARSHIP_VERSION:-}"  # blank = latest
+INSTALL_MODE="${INSTALL_MODE:-auto}"      # auto|user|system
+USE_LATEST="${USE_LATEST:-true}"          # if false and version blank, skip network lookup
 DRY_RUN=false
 ASSUME_YES=false
 
@@ -39,6 +44,8 @@ while (( "$#" )); do
     case "$1" in
         -n|--dry-run) DRY_RUN=true ; shift ;;
         -y|--yes) ASSUME_YES=true ; shift ;;
+        --mode)
+            INSTALL_MODE="${2:-user}"; shift 2 ;;
         -h|--help)
             grep '^# ' "$0" | sed 's/^# //' | sed '1,2d'; exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
@@ -98,10 +105,29 @@ detect_pkg_manager() {
     echo none
 }
 
+have_sudo() { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
+
 PKG_MGR="$(detect_pkg_manager)"
-log "Detected package manager: $PKG_MGR"
+
+if [ "$INSTALL_MODE" = auto ]; then
+    if have_sudo; then INSTALL_MODE=system; else INSTALL_MODE=user; fi
+fi
+log "Install mode: $INSTALL_MODE (pkg mgr: $PKG_MGR)"
+
+get_latest_release() {
+    # arg: owner/repo ; outputs version without leading v where possible
+    local repo="$1" raw tag
+    raw=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep -m1 'tag_name') || return 1
+    tag=$(echo "$raw" | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')
+    tag=${tag#v}
+    printf '%s' "$tag"
+}
 
 pkg_install() {
+    if [ "$INSTALL_MODE" != system ]; then
+        warn "Skipping system package install (user mode): $*"
+        return 0
+    fi
     local pkgs=("$@")
     case "$PKG_MGR" in
         apt) run "sudo apt-get update"; run "sudo apt-get install -y ${pkgs[*]}" ;;
@@ -110,7 +136,7 @@ pkg_install() {
         pacman) run "sudo pacman -Syu --noconfirm ${pkgs[*]}" ;;
         zypper) run "sudo zypper install -y ${pkgs[*]}" ;;
         brew) run "brew install ${pkgs[*]}" ;;
-        none) warn "No supported package manager detected; skipping system install for: ${pkgs[*]}" ;;
+        none) warn "No supported package manager detected for: ${pkgs[*]}" ;;
     esac
 }
 
@@ -138,6 +164,12 @@ fi
 
 install_micro() {
     if ! $MICRO_INSTALL; then return 0; fi
+    if [ -z "$MICRO_VERSION" ] && $USE_LATEST; then
+        MICRO_VERSION=$(get_latest_release zyedidia/micro || true)
+        if [ -z "$MICRO_VERSION" ]; then MICRO_VERSION="2.0.14"; warn "Could not fetch latest micro version; using fallback $MICRO_VERSION"; fi
+    elif [ -z "$MICRO_VERSION" ]; then
+        MICRO_VERSION="2.0.14"; log "Using fallback micro version $MICRO_VERSION (network disabled)";
+    fi
     local micro_dir="$install_dir/micro-${MICRO_VERSION}"
     if [ -x "$micro_dir/micro" ]; then
         log "micro ${MICRO_VERSION} already present at $micro_dir"
@@ -149,8 +181,8 @@ install_micro() {
             armv7*) arch=arm ;;
             *) arch=64bit; warn "Unknown arch $(uname -m); defaulting to 64bit" ;;
         esac
-        local tgz="micro-${MICRO_VERSION}-${os}-${arch}.tar.gz"
-        local url="https://github.com/zyedidia/micro/releases/download/v${MICRO_VERSION}/${tgz}"
+            local tgz="micro-${MICRO_VERSION}-${os}-${arch}.tar.gz"
+            local url="https://github.com/zyedidia/micro/releases/download/v${MICRO_VERSION}/${tgz}"
         log "Downloading micro from $url"
         run "curl -fsSL '$url' -o '$install_dir/$tgz'"
         run "tar -xf '$install_dir/$tgz' -C '$install_dir'"
@@ -161,16 +193,35 @@ install_micro() {
     if [ ! -e "$HOME/bin/micro" ]; then
         run "ln -sf '$micro_dir/micro' '$HOME/bin/micro'"
     fi
+        # Maintain a current symlink inside install dir for scripts
+        run "ln -sfn '$micro_dir' '$install_dir/micro-current'"
     log "micro installed (ensure ~/bin in PATH)"
 }
 
 install_ranger() {
     if ! $RANGER_INSTALL; then return 0; fi
     if ! command -v ranger >/dev/null 2>&1; then
-        log "Installing ranger via package manager"
-        pkg_install ranger || warn "Could not install ranger automatically."
+        if [ "$INSTALL_MODE" = system ]; then
+            log "Installing ranger via system package manager"
+            pkg_install ranger || warn "System install failed; attempting user (pip) install."
+        fi
+    fi
+    if ! command -v ranger >/dev/null 2>&1; then
+        log "Attempting user install (pip) for ranger-fm"
+        local pybin
+        for cand in python3 python; do command -v "$cand" >/dev/null 2>&1 && pybin="$cand" && break; done
+        if [ -z "${pybin:-}" ]; then warn "Python not found; cannot install ranger"; else
+            if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then
+                log "Bootstrapping pip (ensurepip)"
+                run "$pybin -m ensurepip --user || true"
+            fi
+            if command -v pip3 >/dev/null 2>&1; then run "pip3 install --user --upgrade ranger-fm"; else run "pip install --user --upgrade ranger-fm"; fi
+        fi
+    fi
+    if command -v ranger >/dev/null 2>&1; then
+        log "ranger installed at $(command -v ranger)"
     else
-        log "ranger already installed: $(command -v ranger)"
+        warn "ranger installation not found; continuing with config deployment only"
     fi
     local ranger_cfg_dir="$HOME/.config/ranger"
     run "mkdir -p '$ranger_cfg_dir'"
@@ -184,18 +235,58 @@ install_ranger() {
 
 install_zellij() {
     if ! $ZELLIJ_INSTALL; then return 0; fi
+    if [ -z "$ZELLIJ_VERSION" ] && $USE_LATEST; then
+        ZELLIJ_VERSION=$(get_latest_release zellij-org/zellij || true)
+        if [ -z "$ZELLIJ_VERSION" ]; then ZELLIJ_VERSION="0.40.1"; warn "Could not fetch latest zellij version; using fallback $ZELLIJ_VERSION"; fi
+    elif [ -z "$ZELLIJ_VERSION" ]; then
+        ZELLIJ_VERSION="0.40.1"; log "Using fallback zellij version $ZELLIJ_VERSION (network disabled)";
+    fi
     if ! command -v zellij >/dev/null 2>&1; then
-        log "Installing zellij via package manager (or building)"
-        case "$PKG_MGR" in
-            apt) pkg_install zellij || true ;;
-            dnf|yum) pkg_install zellij || true ;;
-            pacman) pkg_install zellij || true ;;
-            zypper) pkg_install zellij || true ;;
-            brew) pkg_install zellij || true ;;
-            none) warn "No package manager; consider: cargo install --locked zellij" ;;
-        esac
+        if [ "$INSTALL_MODE" = system ]; then
+            log "Attempting system package install for zellij"
+            pkg_install zellij || warn "System install failed or unavailable"
+        fi
+    fi
+    if ! command -v zellij >/dev/null 2>&1; then
+        # Try cargo first if available
+        if command -v cargo >/dev/null 2>&1; then
+            log "Installing zellij via cargo (user)"
+            run "cargo install --locked --version ${ZELLIJ_VERSION} zellij || cargo install --locked zellij" || warn "Cargo install failed"
+        else
+            # Download prebuilt binary
+            local arch variant url tgz tmp
+            case "$(uname -m)" in
+                x86_64) arch=x86_64-unknown-linux-musl ;;
+                aarch64|arm64) arch=aarch64-unknown-linux-musl ;;
+                *) arch=x86_64-unknown-linux-musl; warn "Unknown arch $(uname -m); using x86_64 binary" ;;
+            esac
+                    # Try both asset naming schemes (with or without version in filename)
+                    run "mkdir -p '$HOME/.local/bin'"
+                    for pattern in "zellij-${ZELLIJ_VERSION}-${arch}.tar.gz" "zellij-${arch}.tar.gz" "zellij-${arch}.zip"; do
+                        [ -f "$install_dir/$pattern" ] && continue
+                        url="https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/${pattern}"
+                        log "Attempting download $url"
+                        if run "curl -fsSL '$url' -o '$install_dir/$pattern'"; then
+                            if [[ "$pattern" == *.zip ]]; then
+                                run "unzip -o '$install_dir/$pattern' -d '$install_dir/zellij-unpack'"
+                                run "mv '$install_dir/zellij-unpack/zellij' '$HOME/.local/bin/zellij' 2>/dev/null || true"
+                            else
+                                run "tar -xf '$install_dir/$pattern' -C '$install_dir'"
+                                if [ -f "$install_dir/zellij" ]; then run "mv '$install_dir/zellij' '$HOME/.local/bin/zellij'"; else
+                                    tmp=$(tar -tf "$install_dir/$pattern" | head -1 | cut -d/ -f1)
+                                    [ -f "$install_dir/$tmp/zellij" ] && run "mv '$install_dir/$tmp/zellij' '$HOME/.local/bin/zellij'"
+                                fi
+                            fi
+                            break
+                        fi
+                    done
+                    run "chmod +x '$HOME/.local/bin/zellij'" || true
+        fi
+    fi
+    if command -v zellij >/dev/null 2>&1; then
+        log "zellij installed at $(command -v zellij)"
     else
-        log "zellij already installed: $(command -v zellij)"
+        warn "zellij not installed (binary missing)"
     fi
     local z_cfg_dir="$HOME/.config/zellij"
     run "mkdir -p '$z_cfg_dir'"
@@ -209,16 +300,43 @@ install_zellij() {
 install_starship() {
     if ! $STARSHIP_INSTALL; then return 0; fi
     if ! command -v starship >/dev/null 2>&1; then
-        log "Installing starship"
-        run "curl -fsSL https://starship.rs/install.sh -o /tmp/starship-install.sh"
-        if $DRY_RUN; then
-            log "(dry-run) Would execute starship installer"
-        else
-            chmod +x /tmp/starship-install.sh
-            /tmp/starship-install.sh -y -b "$HOME/.local/bin"
+        if [ -z "$STARSHIP_VERSION" ] && $USE_LATEST; then
+            STARSHIP_VERSION=$(get_latest_release starship/starship || true)
+            if [ -z "$STARSHIP_VERSION" ]; then warn "Could not fetch latest starship version; using installer script"; fi
         fi
+        run "mkdir -p '$HOME/.local/bin'"
+        if [ -n "$STARSHIP_VERSION" ]; then
+            local arch; case "$(uname -m)" in
+                x86_64) arch=x86_64-unknown-linux-gnu ;;
+                aarch64|arm64) arch=aarch64-unknown-linux-gnu ;;
+                *) arch=x86_64-unknown-linux-gnu; warn "Unknown arch; defaulting to x86_64" ;;
+            esac
+            local file="starship-${arch}.tar.gz"
+            local url="https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/${file}"
+            log "Downloading starship $STARSHIP_VERSION from $url"
+            if run "curl -fsSL '$url' -o '$install_dir/$file'"; then
+                run "tar -xf '$install_dir/$file' -C '$install_dir'"
+                if [ -f "$install_dir/starship" ]; then run "mv '$install_dir/starship' '$HOME/.local/bin/starship'"; fi
+                run "chmod +x '$HOME/.local/bin/starship'" || true
+            else
+                warn "Download failed; falling back to installer script"
+            fi
+        fi
+        if [ ! -x "$HOME/.local/bin/starship" ]; then
+            log "Installing starship via official script (latest)"
+            run "curl -fsSL https://starship.rs/install.sh -o /tmp/starship-install.sh"
+            if $DRY_RUN; then
+                log "(dry-run) Would execute starship installer"
+            else
+                chmod +x /tmp/starship-install.sh
+                /tmp/starship-install.sh -y -b "$HOME/.local/bin"
+            fi
+        fi
+    fi
+    if command -v starship >/dev/null 2>&1; then
+        log "starship installed at $(command -v starship)"
     else
-        log "starship already installed: $(command -v starship)"
+        warn "starship not installed"
     fi
     local starship_cfg="$HOME/.config/starship.toml"
     run "mkdir -p '$HOME/.config'"
@@ -247,7 +365,7 @@ deploy_misc() {
     :
 }
 
-log "Starting installation (dry-run=$DRY_RUN, assume-yes=$ASSUME_YES)"
+log "Starting installation (dry-run=$DRY_RUN, assume-yes=$ASSUME_YES, mode=$INSTALL_MODE)"
 install_micro
 install_ranger
 install_zellij

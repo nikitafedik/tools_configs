@@ -1,1 +1,1 @@
-/vast/home/fns/soft/micro-2.0.14/micro "$@"
+"${HOME}/soft/micro-current/micro" "$@"
