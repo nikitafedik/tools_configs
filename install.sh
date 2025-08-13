@@ -174,19 +174,54 @@ install_micro() {
     if [ -x "$micro_dir/micro" ]; then
         log "micro ${MICRO_VERSION} already present at $micro_dir"
     else
-        local os=linux arch
+        local arch_pattern asset url tgz
         case "$(uname -m)" in
-            x86_64) arch=64bit ;;
-            aarch64|arm64) arch=arm64 ;;
-            armv7*) arch=arm ;;
-            *) arch=64bit; warn "Unknown arch $(uname -m); defaulting to 64bit" ;;
+            x86_64) arch_pattern='linux64' ;;
+            aarch64|arm64) arch_pattern='linux-arm64' ;;
+            armv7*|armv6*|armv5*) arch_pattern='linux-arm' ;;
+            *) arch_pattern='linux64'; warn "Unknown arch $(uname -m); defaulting to linux64" ;;
         esac
-            local tgz="micro-${MICRO_VERSION}-${os}-${arch}.tar.gz"
-            local url="https://github.com/zyedidia/micro/releases/download/v${MICRO_VERSION}/${tgz}"
-        log "Downloading micro from $url"
-        run "curl -fsSL '$url' -o '$install_dir/$tgz'"
-        run "tar -xf '$install_dir/$tgz' -C '$install_dir'"
-        run "mv '$install_dir/micro-${MICRO_VERSION}' '$micro_dir' 2>/dev/null || true"
+        # Try to discover exact asset name via GitHub API
+        asset=""
+        if $USE_LATEST || [ -n "$MICRO_VERSION" ]; then
+            local release_json
+            release_json=$(curl -fsSL "https://api.github.com/repos/zyedidia/micro/releases/tags/v${MICRO_VERSION}" 2>/dev/null || true)
+            if [ -n "$release_json" ]; then
+                asset=$(echo "$release_json" | grep -E '"name" *: *"micro-' | grep "$arch_pattern" | grep -E '\\.(tar.gz|zip)"' | head -1 | sed -E 's/.*"name" *: *"([^"]+)".*/\1/')
+            fi
+        fi
+        if [ -z "$asset" ]; then
+            # Fallback guess patterns (correct known pattern micro-<v>-linux64.tar.gz)
+            for guess in "micro-${MICRO_VERSION}-${arch_pattern}.tar.gz" "micro-${MICRO_VERSION}-${arch_pattern}.zip"; do
+                # HEAD request to see if exists
+                if curl -fsI "https://github.com/zyedidia/micro/releases/download/v${MICRO_VERSION}/${guess}" >/dev/null 2>&1; then asset="$guess"; break; fi
+            done
+        fi
+        if [ -z "$asset" ]; then
+            err "Unable to determine micro asset name for version ${MICRO_VERSION} (arch pattern: $arch_pattern)"; return 1
+        fi
+        url="https://github.com/zyedidia/micro/releases/download/v${MICRO_VERSION}/${asset}"
+        log "Downloading micro asset $asset"
+        run "curl -fsSL '$url' -o '$install_dir/$asset'"
+        if [[ "$asset" == *.zip ]]; then
+            run "unzip -o '$install_dir/$asset' -d '$install_dir/micro-${MICRO_VERSION}-unpack'"
+            # Find micro binary within unpack
+            local bin_path
+            bin_path=$(find "$install_dir/micro-${MICRO_VERSION}-unpack" -type f -name micro -maxdepth 3 | head -1 || true)
+            if [ -n "$bin_path" ]; then
+                run "mkdir -p '$micro_dir'"
+                run "cp -a '$bin_path' '$micro_dir/micro'"
+            fi
+        else
+            run "tar -xf '$install_dir/$asset' -C '$install_dir'"
+            # Tar usually creates dir micro-${MICRO_VERSION}
+            if [ -d "$install_dir/micro-${MICRO_VERSION}" ]; then
+                run "mv '$install_dir/micro-${MICRO_VERSION}' '$micro_dir' 2>/dev/null || true"
+            fi
+        fi
+        if [ ! -x "$micro_dir/micro" ]; then
+            err "micro binary not found after extraction"; return 1
+        fi
     fi
     # Symlink into ~/bin
     run "mkdir -p '$HOME/bin'"
