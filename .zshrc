@@ -1,8 +1,11 @@
 # If you come from bash you might have to change your $PATH.
 # created/modified by FNS (nikitafedik@gmail.com)
 # === PATH ===
-export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$HOME/SOFT:$PATH
+export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$HOME/soft:$PATH
+
 unsetopt AUTO_NAME_DIRS
+# hash -d -r
+
 ZIM_HOME=~/.zim
 
 zstyle ':omz:update' mode reminder  # just remind me to update when it's time
@@ -21,7 +24,7 @@ ENABLE_CORRECTION="true" # Uncomment the following line to enable command auto-c
 # === MY  FUNCTIONS and SETTINGS  ====
 
 setopt INC_APPEND_HISTORY # append to history immediately
-hash -r # remove hashed dirs to declutter hash table; needed for custom bookmark functionality
+# hash -r # remove hashed dirs to declutter hash table; needed for custom bookmark functionality
 
 function virtualenv_info() {
     if [[ -n "$VIRTUAL_ENV" ]]; then
@@ -29,17 +32,17 @@ function virtualenv_info() {
     fi
 }
 
-# autoload -Uz compinit && compinit
-fpath=(~/.zsh/functions/bookmarks $fpath)
-
-# Autoload the common function and the bookmark functions.
-autoload -Uz init_bookmarks ba br b
-
-# Source the common file to ensure BOOKMARK_FILE and BOOKMARKS_LOADED are set.
-source ~/.zsh/functions/bookmarks/bookmark_common
-
-# Initialize bookmarks on shell startup.
-init_bookmarks
+# # autoload -Uz compinit && compinit
+# fpath=(~/.zsh/functions/bookmarks $fpath)
+# 
+# # Autoload the common function and the bookmark functions.
+# autoload -Uz init_bookmarks ba br b
+# 
+# # Source the common file to ensure BOOKMARK_FILE and BOOKMARKS_LOADED are set.
+# source ~/.zsh/functions/bookmarks/bookmark_common
+# 
+# # Initialize bookmarks on shell startup.
+# init_bookmarks
 
 # Completer chain: expand aliases, complete files/dirs, handle typos
 zstyle ':completion:*' completer _expand _complete _ignored _approximate
@@ -52,6 +55,7 @@ zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 zstyle ':completion:*:cd:*' tag-order local-directories directory-stack path-directories
 zstyle ':completion:*:vim:*' file-patterns '*.txt' '*.md' '*.py' '*.sh'
 zstyle ':completion:*:files' file-sort modification
+zstyle ':completion:*' users
 zstyle ':completion:*:named-directories' format '%d -> %p'
 zstyle ':completion:*:hashed-directories' format '%d -> %p'
 # Include hidden files in completions
@@ -86,7 +90,13 @@ fi
 # Initialize modules.
 source ${ZIM_HOME}/init.zsh
 
-# === END ZIMFW ===antidote load
+# === END ZIMFW ===
+
+
+precmd () { echo -n "\x1b]1337;CurrentDir=$(pwd)\x07" }
 
 # CUSTOM PROMPT
 eval "$(starship init zsh)"
+
+
+
