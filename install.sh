@@ -1,195 +1,107 @@
 #!/usr/bin/env bash
+# Minimal per-component installer. Requirements:
+# 1) If target already exists -> skip.
+# 2) Failures are reported; script continues.
+# 3) Ask before EACH install (no upfront batch questions).
+# 4) Keep it short & easy to read.
 
-# Simplified installer (no system package managers) for:
-#   micro (via curl https://getmic.ro | bash)
-#   ranger (pip --user install ranger-fm)
-#   zellij (cargo install --locked zellij)
-#   starship (optional via official script)
-# Plus repository configs: ranger/, .config/zellij/config.kdl, starship.toml, alias_scripts/*
-#
-# FOCUS: Safe backups & simplicity. We do NOT manage multiple versions.
-# Existing configs are preserved with timestamped backup copies BEFORE replacement.
-#
-# Usage:
-#   bash install.sh          # interactive
-#   bash install.sh -y       # non-interactive (install all)
-#   bash install.sh --dry-run
-#
-# Env toggles (true|false): MICRO_INSTALL, RANGER_INSTALL, ZELLIJ_INSTALL, STARSHIP_INSTALL
-# INSTALL_DIR (default: ~/soft)
-
-set -euo pipefail
-IFS=$'\n\t'
-
+set -e
 REPO_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_INSTALL_DIR="${INSTALL_DIR:-$HOME/soft}"
-DRY_RUN=false
-ASSUME_YES=false
+INSTALL_DIR=${INSTALL_DIR:-"$HOME/soft"}
+mkdir -p "$INSTALL_DIR" "$HOME/.config" >/dev/null 2>&1 || true
 
-while (( "$#" )); do
-    case "$1" in
-        -n|--dry-run) DRY_RUN=true; shift ;;
-        -y|--yes) ASSUME_YES=true; shift ;;
-        -h|--help) grep '^# ' "$0" | sed 's/^# //' | sed '1,2d'; exit 0 ;;
-        *) echo "Unknown arg: $1" >&2; exit 1 ;;
-    esac
-done
+ask() { read -r -p "$1 [y/N]: " _r; [[ $_r =~ ^[Yy]$ ]]; }
+note() { printf '[%s] %s\n' "$1" "$2"; }
+ok() { note OK "$1"; }
+warn() { note WARN "$1" >&2; }
+fail() { note FAIL "$1" >&2; }
 
-log() { printf '[INFO] %s\n' "$*"; }
-warn() { printf '[WARN] %s\n' "$*" >&2; }
-err() { printf '[ERROR] %s\n' "$*" >&2; }
-run() { if $DRY_RUN; then printf '[DRY] %s\n' "$*"; else eval "$@"; fi }
-timestamp() { date +%Y%m%d-%H%M%S; }
-
-prompt_default() { local p="$1" d="$2" v; $ASSUME_YES && { printf '%s\n' "$d"; return; }; read -r -p "$p [$d]: " v || true; [ -z "$v" ] && printf '%s\n' "$d" || printf '%s\n' "$v"; }
-confirm() { local m="$1" def=${2:-false} pr="y/N"; $def && pr="Y/n"; $ASSUME_YES && return 0; read -r -p "$m [$pr] " a || true; $def && [[ "$a" =~ ^([Yy]|)$ ]] && return 0; [[ "$a" =~ ^[Yy]$ ]]; }
-
-backup_item() {
-    local path="$1"
-    [ -e "$path" ] || return 0
-    local ts="$(timestamp)" base="$(basename "$path")" dir="$(dirname "$path")" bak="$dir/.${base}.bak-${ts}"
-    run "cp -a '$path' '$bak'"
-    log "Backup: $path -> $bak"
-}
-
-backup_dir_rename() {
-    # Safer for large directories (moves instead of copying).
-    local path="$1"; [ -d "$path" ] || return 0
-    local ts="$(timestamp)" dir="$(dirname "$path")" base="$(basename "$path")"
-    local new="${path}.bak-${ts}"
-    run "mv '$path' '$new'"
-    log "Renamed existing directory: $path -> $new"
-}
-
-install_dir="$(prompt_default 'Installation directory' "$DEFAULT_INSTALL_DIR")"
-run "mkdir -p '$install_dir'"
-run "mkdir -p '$HOME/bin' '$HOME/.local/bin' '$HOME/.config'"
-
-MICRO_INSTALL=${MICRO_INSTALL:-true}
-RANGER_INSTALL=${RANGER_INSTALL:-true}
-ZELLIJ_INSTALL=${ZELLIJ_INSTALL:-true}
-STARSHIP_INSTALL=${STARSHIP_INSTALL:-true}
-
-if ! $ASSUME_YES; then
-    $MICRO_INSTALL && confirm "Install micro?" true || MICRO_INSTALL=false
-    $RANGER_INSTALL && confirm "Install ranger (pip --user)?" true || RANGER_INSTALL=false
-    $ZELLIJ_INSTALL && confirm "Install zellij (cargo)?" true || ZELLIJ_INSTALL=false
-    $STARSHIP_INSTALL && confirm "Install starship?" true || STARSHIP_INSTALL=false
+# MICRO -----------------------------------------------------------------
+micro_dir="$INSTALL_DIR/micro"
+if [ -d "$micro_dir" ] && [ -x "$micro_dir/micro" ]; then
+    ok "micro already installed -> $micro_dir (skip)"
+else
+    if ask "Install micro editor?"; then
+        mkdir -p "$micro_dir" || true
+        if ( cd "$micro_dir" && curl -fsSL https://getmic.ro | bash ); then
+            ln -sfn "$micro_dir/micro" "$HOME/bin/micro" 2>/dev/null || true
+            ok "micro installed"
+        else
+            fail "micro install failed"
+        fi
+    else
+        warn "micro skipped by user"
+    fi
 fi
 
-install_micro() {
-    $MICRO_INSTALL || return 0
-    if command -v micro >/dev/null 2>&1; then
-        log "micro already on PATH: $(command -v micro) (will overwrite symlink only)"
-    fi
-    # If install_dir/micro exists and is non-empty but lacks a micro binary, back it up to avoid conflicts.
-    if [ -e "$install_dir/micro" ] && [ ! -d "$install_dir/micro" ]; then
-        # A file (likely old binary) blocks directory creation; rename it.
-        backup_item "$install_dir/micro"
-        run "rm -f '$install_dir/micro'"
-    fi
-    if [ -d "$install_dir/micro" ]; then
-        if [ -f "$install_dir/micro/micro" ]; then
-            log "Existing micro install directory detected; will update in place."
-        else
-            # Non-standard contents; rename for safety.
-            backup_dir_rename "$install_dir/micro"
-            run "mkdir -p '$install_dir/micro'"
+# RANGER ----------------------------------------------------------------
+ranger_cfg="$HOME/.config/ranger"
+if command -v ranger >/dev/null 2>&1 && [ -d "$ranger_cfg" ]; then
+    ok "ranger already present (skip)"
+else
+    if ask "Install ranger (pip --user)?"; then
+        py=""; for c in python3 python; do command -v "$c" >/dev/null 2>&1 && py="$c" && break; done
+        if [ -z "$py" ]; then fail "python not found"; else
+            if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then "$py" -m ensurepip --user >/dev/null 2>&1 || true; fi
+            (pip3 install --user ranger-fm 2>/dev/null || pip install --user ranger-fm 2>/dev/null) && ok "ranger installed" || warn "ranger pip install issue"
+            [ -d "$ranger_cfg" ] || mkdir -p "$ranger_cfg"
+            cp -a "$REPO_ROOT_DIR/ranger/"* "$ranger_cfg/" 2>/dev/null || true
         fi
     else
-        run "mkdir -p '$install_dir/micro'"
+        warn "ranger skipped by user"
     fi
-    if $DRY_RUN; then
-        log "(dry-run) Would: cd '$install_dir/micro' && curl https://getmic.ro | bash"
-    else
-        ( cd "$install_dir/micro" && curl -fsSL https://getmic.ro | bash ) || { err "micro install failed"; return 1; }
-    fi
-    local bin_src
-    bin_src=$(find "$install_dir/micro" -maxdepth 1 -type f -name micro 2>/dev/null | head -1 || true)
-    [ -z "$bin_src" ] && { err "micro binary not found"; return 1; }
-    run "ln -sfn '$bin_src' '$HOME/bin/micro'"
-    log "micro installed -> $bin_src (symlinked to ~/bin/micro)"
-}
+fi
 
-install_ranger() {
-    $RANGER_INSTALL || return 0
-    local py
-    for c in python3 python; do command -v "$c" >/dev/null 2>&1 && py="$c" && break; done
-    [ -z "${py:-}" ] && { warn "Python not found; skipping ranger"; return 0; }
-    if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then
-        log "Bootstrapping pip"
-        run "$py -m ensurepip --user || true"
-    fi
-    log "Installing / upgrading ranger-fm (pip --user)"
-    if command -v pip3 >/dev/null 2>&1; then run "pip3 install --user --upgrade ranger-fm"; else run "pip install --user --upgrade ranger-fm"; fi
-    if command -v ranger >/dev/null 2>&1; then log "ranger at $(command -v ranger)"; else warn "ranger not on PATH after install"; fi
-    local cfg="$HOME/.config/ranger"
-    if [ -d "$cfg" ]; then
-        # Always rotate existing directory instead of copying for speed & simplicity.
-        backup_dir_rename "$cfg"
-    fi
-    run "mkdir -p '$cfg'"
-    run "cp -a '${REPO_ROOT_DIR}/ranger/'* '$cfg/'"
-    log "ranger config deployed"
-}
-
-install_zellij() {
-    $ZELLIJ_INSTALL || return 0
-    if command -v zellij >/dev/null 2>&1; then
-        log "zellij already present: $(command -v zellij)"
-    elif command -v cargo >/dev/null 2>&1; then
-        log "Installing zellij via cargo (locked)"
-        run "cargo install --locked zellij" || warn "cargo install zellij failed"
-    else
-        warn "cargo not found; skipping zellij install"
-    fi
-    local zcfg="$HOME/.config/zellij"
-    if [ -d "$zcfg" ]; then
-        # Rotate entire zellij config directory for consistency.
-        backup_dir_rename "$zcfg"
-    fi
-    run "mkdir -p '$zcfg'"
-    run "cp -a '${REPO_ROOT_DIR}/.config/zellij/config.kdl' '$zcfg/config.kdl'"
-    log "zellij config deployed"
-}
-
-install_starship() {
-    $STARSHIP_INSTALL || return 0
-    if ! command -v starship >/dev/null 2>&1; then
-        log "Installing starship (latest)"
-        run "curl -fsSL https://starship.rs/install.sh -o /tmp/starship-install.sh"
-        if $DRY_RUN; then
-            log "(dry-run) Would run starship installer"
+# ZELLIJ ----------------------------------------------------------------
+zellij_cfg="$HOME/.config/zellij"
+if command -v zellij >/dev/null 2>&1 && [ -f "$zellij_cfg/config.kdl" ]; then
+    ok "zellij already present (skip)"
+else
+    if ask "Install zellij (cargo)?"; then
+        if command -v cargo >/dev/null 2>&1; then
+            if cargo install --locked zellij >/dev/null 2>&1; then ok "zellij installed"; else warn "cargo zellij install failed"; fi
         else
-            chmod +x /tmp/starship-install.sh
-            /tmp/starship-install.sh -y -b "$HOME/.local/bin"
+            warn "cargo not found (skip zellij)"
         fi
+        [ -d "$zellij_cfg" ] || mkdir -p "$zellij_cfg"
+        cp -a "$REPO_ROOT_DIR/.config/zellij/config.kdl" "$zellij_cfg/config.kdl" 2>/dev/null || true
     else
-        log "starship already present: $(command -v starship)"
+        warn "zellij skipped by user"
     fi
-    local scfg="$HOME/.config/starship.toml"
-    [ -f "$scfg" ] && backup_item "$scfg"
-    [ -f "${REPO_ROOT_DIR}/starship.toml" ] && run "cp -a '${REPO_ROOT_DIR}/starship.toml' '$scfg'" && log "starship config deployed"
-}
+fi
 
-install_aliases() {
-    local src="${REPO_ROOT_DIR}/alias_scripts"; [ -d "$src" ] || return 0
-    local target="$install_dir/aliases"
-    if [ -d "$target" ]; then backup_dir_rename "$target"; fi
-    run "mkdir -p '$target'"
-    for f in "$src"/*; do
-        [ -f "$f" ] || continue
-        local base="$(basename "$f")" dest="$target/$base"
-        run "cp -a '$f' '$dest'"; run "chmod +x '$dest'"; log "Alias installed: $dest"
-    done
-    log "Add to PATH (if desired): export PATH=\"$target:\$PATH\""
-}
+# STARSHIP ---------------------------------------------------------------
+starship_cfg="$HOME/.config/starship.toml"
+if command -v starship >/dev/null 2>&1 && [ -f "$starship_cfg" ]; then
+    ok "starship already present (skip)"
+else
+    if ask "Install starship prompt?"; then
+        tmp=/tmp/starship-inst.sh
+        if curl -fsSL https://starship.rs/install.sh -o "$tmp" && chmod +x "$tmp" && "$tmp" -y -b "$HOME/.local/bin" >/dev/null 2>&1; then
+            ok "starship installed"
+        else
+            warn "starship install failed"
+        fi
+        cp -a "$REPO_ROOT_DIR/starship.toml" "$starship_cfg" 2>/dev/null || true
+    else
+        warn "starship skipped by user"
+    fi
+fi
 
-log "Starting simplified install (dry-run=$DRY_RUN, assume-yes=$ASSUME_YES)"
-install_micro
-install_ranger
-install_zellij
-install_starship
-install_aliases
-log "All tasks complete. Ensure PATH includes ~/bin and ~/.local/bin"
-log "Export example: export PATH=\"$HOME/bin:$HOME/.local/bin:$install_dir/aliases:$PATH\""
+# ALIASES ---------------------------------------------------------------
+alias_src="$REPO_ROOT_DIR/alias_scripts"
+alias_dst="$INSTALL_DIR/aliases"
+if [ -d "$alias_dst" ]; then
+    ok "aliases already exist (skip)"
+else
+    if [ -d "$alias_src" ]; then
+        mkdir -p "$alias_dst"
+        cp -a "$alias_src/"* "$alias_dst/" 2>/dev/null || true
+        ok "aliases copied -> $alias_dst (add to PATH if needed)"
+    fi
+fi
+
+echo
+echo "Done. Suggested PATH addition:"
+echo "  export PATH=\"$HOME/bin:$HOME/.local/bin:$alias_dst:\$PATH\""
+echo
