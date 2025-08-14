@@ -83,6 +83,11 @@ install_micro() {
         log "micro already on PATH: $(command -v micro) (will overwrite symlink only)"
     fi
     # If install_dir/micro exists and is non-empty but lacks a micro binary, back it up to avoid conflicts.
+    if [ -e "$install_dir/micro" ] && [ ! -d "$install_dir/micro" ]; then
+        # A file (likely old binary) blocks directory creation; rename it.
+        backup_item "$install_dir/micro"
+        run "rm -f '$install_dir/micro'"
+    fi
     if [ -d "$install_dir/micro" ]; then
         if [ -f "$install_dir/micro/micro" ]; then
             log "Existing micro install directory detected; will update in place."
@@ -119,8 +124,11 @@ install_ranger() {
     if command -v pip3 >/dev/null 2>&1; then run "pip3 install --user --upgrade ranger-fm"; else run "pip install --user --upgrade ranger-fm"; fi
     if command -v ranger >/dev/null 2>&1; then log "ranger at $(command -v ranger)"; else warn "ranger not on PATH after install"; fi
     local cfg="$HOME/.config/ranger"
+    if [ -d "$cfg" ]; then
+        # Always rotate existing directory instead of copying for speed & simplicity.
+        backup_dir_rename "$cfg"
+    fi
     run "mkdir -p '$cfg'"
-    [ -d "$cfg" ] && [ "$(ls -A "$cfg" 2>/dev/null | wc -l)" -gt 0 ] && backup_item "$cfg"
     run "cp -a '${REPO_ROOT_DIR}/ranger/'* '$cfg/'"
     log "ranger config deployed"
 }
@@ -136,8 +144,11 @@ install_zellij() {
         warn "cargo not found; skipping zellij install"
     fi
     local zcfg="$HOME/.config/zellij"
+    if [ -d "$zcfg" ]; then
+        # Rotate entire zellij config directory for consistency.
+        backup_dir_rename "$zcfg"
+    fi
     run "mkdir -p '$zcfg'"
-    [ -f "$zcfg/config.kdl" ] && backup_item "$zcfg/config.kdl"
     run "cp -a '${REPO_ROOT_DIR}/.config/zellij/config.kdl' '$zcfg/config.kdl'"
     log "zellij config deployed"
 }
@@ -163,13 +174,15 @@ install_starship() {
 
 install_aliases() {
     local src="${REPO_ROOT_DIR}/alias_scripts"; [ -d "$src" ] || return 0
-    run "mkdir -p '$HOME/bin'"
+    local target="$install_dir/aliases"
+    if [ -d "$target" ]; then backup_dir_rename "$target"; fi
+    run "mkdir -p '$target'"
     for f in "$src"/*; do
         [ -f "$f" ] || continue
-        local base="$(basename "$f")" dest="$HOME/bin/$base"
-        [ -e "$dest" ] && backup_item "$dest"
-        run "cp -a '$f' '$dest'"; run "chmod +x '$dest'"; log "Alias installed: $base"
+        local base="$(basename "$f")" dest="$target/$base"
+        run "cp -a '$f' '$dest'"; run "chmod +x '$dest'"; log "Alias installed: $dest"
     done
+    log "Add to PATH (if desired): export PATH=\"$target:\$PATH\""
 }
 
 log "Starting simplified install (dry-run=$DRY_RUN, assume-yes=$ASSUME_YES)"
@@ -179,4 +192,4 @@ install_zellij
 install_starship
 install_aliases
 log "All tasks complete. Ensure PATH includes ~/bin and ~/.local/bin"
-log "Export example: export PATH=\"$HOME/bin:$HOME/.local/bin:$PATH\""
+log "Export example: export PATH=\"$HOME/bin:$HOME/.local/bin:$install_dir/aliases:$PATH\""
