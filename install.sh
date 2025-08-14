@@ -52,6 +52,15 @@ backup_item() {
     log "Backup: $path -> $bak"
 }
 
+backup_dir_rename() {
+    # Safer for large directories (moves instead of copying).
+    local path="$1"; [ -d "$path" ] || return 0
+    local ts="$(timestamp)" dir="$(dirname "$path")" base="$(basename "$path")"
+    local new="${path}.bak-${ts}"
+    run "mv '$path' '$new'"
+    log "Renamed existing directory: $path -> $new"
+}
+
 install_dir="$(prompt_default 'Installation directory' "$DEFAULT_INSTALL_DIR")"
 run "mkdir -p '$install_dir'"
 run "mkdir -p '$HOME/bin' '$HOME/.local/bin' '$HOME/.config'"
@@ -73,7 +82,18 @@ install_micro() {
     if command -v micro >/dev/null 2>&1; then
         log "micro already on PATH: $(command -v micro) (will overwrite symlink only)"
     fi
-    run "mkdir -p '$install_dir/micro'"
+    # If install_dir/micro exists and is non-empty but lacks a micro binary, back it up to avoid conflicts.
+    if [ -d "$install_dir/micro" ]; then
+        if [ -f "$install_dir/micro/micro" ]; then
+            log "Existing micro install directory detected; will update in place."
+        else
+            # Non-standard contents; rename for safety.
+            backup_dir_rename "$install_dir/micro"
+            run "mkdir -p '$install_dir/micro'"
+        fi
+    else
+        run "mkdir -p '$install_dir/micro'"
+    fi
     if $DRY_RUN; then
         log "(dry-run) Would: cd '$install_dir/micro' && curl https://getmic.ro | bash"
     else
