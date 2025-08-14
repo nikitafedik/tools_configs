@@ -6,6 +6,7 @@
 # 4) Keep it short & easy to read.
 
 set -e
+set -o pipefail
 REPO_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR=${INSTALL_DIR:-"$HOME/soft"}
 mkdir -p "$INSTALL_DIR" "$HOME/.config" >/dev/null 2>&1 || true
@@ -59,11 +60,20 @@ fi
 ensure_cargo() {
     if command -v cargo >/dev/null 2>&1; then return 0; fi
     if ask "Install Rust toolchain (cargo)?"; then
-        curl -fsSL --retry 3 --retry-delay 2 https://sh.rustup.rs -o /tmp/rustup.sh || return 1
-        sh /tmp/rustup.sh -y >/dev/null 2>&1 || return 1
-        # shellcheck disable=SC1091
-        [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-        command -v cargo >/dev/null 2>&1 && ok "cargo installed" || fail "cargo install failed"
+        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y >/dev/null 2>&1; then
+            # shellcheck disable=SC1091
+            [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+            if command -v cargo >/dev/null 2>&1; then
+                ok "cargo installed"
+                return 0
+            else
+                fail "cargo install failed"
+                return 1
+            fi
+        else
+            fail "cargo install failed (network or script error)"
+            return 1
+        fi
     else
         warn "cargo install declined"
         return 1
