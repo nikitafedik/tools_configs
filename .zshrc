@@ -1,7 +1,7 @@
 # If you come from bash you might have to change your $PATH.
 # created/modified by FNS (nikitafedik@gmail.com)
 # === PATH ===
-export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$HOME/soft:$PATH
+export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$HOME/soft:$HOME/soft/scripts:$HOME/soft/aliases:$PATH
 
 unsetopt AUTO_NAME_DIRS
 # hash -d -r
