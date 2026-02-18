@@ -88,6 +88,7 @@ if [[ ! ${ZIM_HOME}/init.zsh -nt ${ZDOTDIR:-${HOME}}/.zimrc ]]; then
 fi
 
 # Initialize modules.
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=238' #works best with black bg
 source ${ZIM_HOME}/init.zsh
 
 # === END ZIMFW ===
