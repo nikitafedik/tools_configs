@@ -362,6 +362,20 @@ sync_config "$REPO_ROOT_DIR/.condarc"                   "$HOME/.condarc"        
 sync_config "$REPO_ROOT_DIR/.config/git/ignore"         "$HOME/.config/git/ignore"         "global gitignore"
 sync_config "$REPO_ROOT_DIR/.config/micro/bindings.json" "$HOME/.config/micro/bindings.json" "micro bindings"
 
+# CLAUDE CODE ------------------------------------------------------------
+sync_config "$REPO_ROOT_DIR/.claude/settings.json"       "$HOME/.claude/settings.json"       "claude settings"
+sync_config "$REPO_ROOT_DIR/.claude/settings.local.json" "$HOME/.claude/settings.local.json" "claude local settings"
+sync_config "$REPO_ROOT_DIR/.claude/statusline-command.sh" "$HOME/.claude/statusline-command.sh" "claude statusline"
+sync_config "$REPO_ROOT_DIR/.claude/hooks/approve-safe-bash.sh"    "$HOME/.claude/hooks/approve-safe-bash.sh"    "claude hook: approve-safe-bash"
+sync_config "$REPO_ROOT_DIR/.claude/hooks/show-diff-after-edit.sh" "$HOME/.claude/hooks/show-diff-after-edit.sh" "claude hook: show-diff-after-edit"
+sync_config "$REPO_ROOT_DIR/.claude/hooks/notify.sh"               "$HOME/.claude/hooks/notify.sh"               "claude hook: notify"
+chmod +x "$HOME/.claude/statusline-command.sh" "$HOME/.claude/hooks/"*.sh 2>/dev/null || true
+# Patch hardcoded /home/nfedik paths to current user
+if grep -q '/home/nfedik/' "$HOME/.claude/settings.json" 2>/dev/null; then
+    sed -i "s|/home/nfedik/|$HOME/|g" "$HOME/.claude/settings.json"
+    ok "claude settings: patched home paths to $HOME"
+fi
+
 printf '\n'
 note INFO "Done. Suggested PATH addition:"
 note INFO "  export PATH=\"$HOME/bin:$HOME/.local/bin:$alias_dst:\$PATH\""
