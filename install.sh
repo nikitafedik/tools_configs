@@ -337,12 +337,12 @@ if [ "$starship_skip" -eq 0 ]; then
 fi
 sync_config "$REPO_ROOT_DIR/starship.toml" "$starship_cfg" "starship config"
 
-# ALIASES ---------------------------------------------------------------
+# ALIASES / SCRIPTS -----------------------------------------------------
 alias_src="$REPO_ROOT_DIR/alias_scripts"
-alias_dst="$INSTALL_DIR/aliases"
+alias_dst="$INSTALL_DIR/scripts"
 aliases_ready=0
 if [ -d "$alias_dst" ]; then
-    if skip_if_verified "aliases" test -x "$alias_dst/rng"; then
+    if skip_if_verified "scripts" test -x "$alias_dst/rng"; then
         aliases_ready=1
     fi
 fi
@@ -350,16 +350,17 @@ if [ "$aliases_ready" -eq 0 ]; then
     if [ -d "$alias_src" ]; then
         mkdir -p "$alias_dst"
         cp -a "$alias_src/"* "$alias_dst/" || true
-        ok "aliases copied -> $alias_dst (add to PATH if needed)"
-        # Add rng alias wrapper if not present
-        if [ ! -f "$alias_dst/rng" ]; then
-            printf '#!/usr/bin/env bash
-ranger "$@"
-' > "$alias_dst/rng" && chmod +x "$alias_dst/rng"
-            ok "added rng alias"
-        fi
+        chmod +x "$alias_dst/"* 2>/dev/null || true
+        ok "scripts copied -> $alias_dst"
     fi
 fi
+
+# DOTFILES ---------------------------------------------------------------
+sync_config "$REPO_ROOT_DIR/.zshenv"                    "$HOME/.zshenv"                    "zsh env"
+sync_config "$REPO_ROOT_DIR/.gitconfig"                 "$HOME/.gitconfig"                 "gitconfig"
+sync_config "$REPO_ROOT_DIR/.condarc"                   "$HOME/.condarc"                   "conda config"
+sync_config "$REPO_ROOT_DIR/.config/git/ignore"         "$HOME/.config/git/ignore"         "global gitignore"
+sync_config "$REPO_ROOT_DIR/.config/micro/bindings.json" "$HOME/.config/micro/bindings.json" "micro bindings"
 
 printf '\n'
 note INFO "Done. Suggested PATH addition:"
