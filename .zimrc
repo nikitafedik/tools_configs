@@ -1,7 +1,6 @@
-# This is not sourced during shell startup, and it's only used to configure the
-# zimfw plugin manager.
+# This is not sourced during shell startup, and it's only used to configure thezimfw plugin manager.
  
-# # === Modules ===
+# === Modules ===
  
 # Sets sane Zsh built-in environment options.
 zmodule environment
@@ -12,7 +11,7 @@ zmodule input
 # Sets a custom terminal title.
 zmodule termtitle
 # Utility aliases and functions. Adds colour to ls, grep and less.
- zmodule utility
+zmodule utility
  
  
 # === THEME  ===
@@ -31,7 +30,7 @@ zmodule completion
 
 # Fish-like syntax highlighting for Zsh.
 # zsh-users/zsh-syntax-highlighting must be sourced after completion
-#zmodule zsh-users/zsh-syntax-highlighting
+zmodule zsh-users/zsh-syntax-highlighting
 
 
 # Fish-like history search (up arrow) for Zsh.
@@ -44,6 +43,5 @@ zmodule zsh-users/zsh-autosuggestions
 # === CUSTOM MODULES ===
 
 zmodule nvbn/thefuck
-zmodule zsh-users/zsh-autosuggestions
 zmodule jocelynmallon/zshmarks
 zmodule nikitafedik/hashmarks
