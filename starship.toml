@@ -7,7 +7,7 @@ $character
 
 [time]
 disabled = false
-format = '[|](black bold) [$time]($style) '
+format = '[|](bright-black bold) [$time]($style) '
 time_format = "%T"
 style = "bold blue"
 
@@ -40,17 +40,17 @@ show_always = true
 # Shows the hostname
 [hostname]
 ssh_only = true
-format = '[|](black bold) [$hostname](bold #a1e3b3) '
+format = '[|](bright-black bold) [$hostname](bold #a1e3b3) '
 disabled = false
 
 # Shows current directory
 [directory]
 truncation_length = 0
 truncation_symbol = '…/'
-home_symbol = '󰋜'
+home_symbol = '~'
 # read_only_style = '197'
 read_only = '  '
-format = '[| ](black bold) [$path]($style)[$read_only]($read_only_style) '
+format = '[|](bright-black bold) [$path]($style)[$read_only]($read_only_style) '
 style = '#5fd980 bold' # yellow bold
 
 
@@ -58,7 +58,7 @@ style = '#5fd980 bold' # yellow bold
 [git_branch]
 # symbol = '󰊢 '
 symbol = '󰊢 '
-format = '[|](black bold) [$symbol\[$branch\]]($style) '
+format = '[|](bright-black bold) [$symbol\[$branch\]]($style) '
 style = 'bold green'
 
 # Shows current git status
@@ -97,7 +97,7 @@ disabled = true
 [python]
 symbol = ' '
 python_binary = ['./venv/bin/python', 'python', 'python3', 'python2']
-format = '[|](black bold) [${symbol} ${pyenv_prefix}(${version} )(\($virtualenv\) )]($style) '
+format = '[|](bright-black bold) [${symbol} ${pyenv_prefix}(${version} )(\($virtualenv\) )]($style) '
 
 
 [nodejs]
