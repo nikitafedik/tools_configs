@@ -1,382 +1,231 @@
 #!/usr/bin/env bash
-# Minimal per-component installer. Requirements:
-# 1) If target already exists -> skip.
-# 2) Failures are reported; script continues.
-# 3) Ask before EACH install (no upfront batch questions).
-# 4) Keep it short & easy to read.
+# Shell environment installer. Syncs zsh, starship, zellij, and dotfiles.
+# Asks before each install. Backs up existing files before overwriting.
+# Usage: install.sh [-v] [-c]
 
 set -e
 set -o pipefail
 
-SCRIPT_PREFIX="INSTALL"
 VERBOSE=0
 CHECK_EXISTING=0
 
 usage() {
-    local script_name
-    script_name="$(basename "$0")"
     cat <<EOF
-Usage: $script_name [options]
+Usage: $(basename "$0") [options]
 
 Options:
-  -v, --verbose               Show each shell command with a [CMD] prefix
-  -c, --check-existing        Verify existing installs before skipping them
-      --skip-existing         Alias for --check-existing
-  -h, --help                  Show this help text and exit
+  -v, --verbose           Show each shell command
+  -c, --check-existing    Verify existing installs before skipping
+  -h, --help              Show this help
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -v|--verbose)
-            VERBOSE=1
-            ;;
-        -c|--check-existing|--skip-existing)
-            CHECK_EXISTING=1
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            printf '[%s/ERR] Unknown option: %s\n' "$SCRIPT_PREFIX" "$1" >&2
-            usage >&2
-            exit 1
-            ;;
+        -v|--verbose)        VERBOSE=1 ;;
+        -c|--check-existing) CHECK_EXISTING=1 ;;
+        -h|--help)           usage; exit 0 ;;
+        *)                   printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
     shift
 done
 
-if [ "$VERBOSE" -eq 1 ]; then
-    export PS4='[CMD] '
-    set -x
-fi
+[ "$VERBOSE" -eq 1 ] && export PS4='[CMD] ' && set -x
 
-REPO_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR=${INSTALL_DIR:-"$HOME/soft"}
-mkdir -p "$INSTALL_DIR" "$HOME/.config" || true
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/soft}"
+mkdir -p "$INSTALL_DIR" "$HOME/.config" "$HOME/bin" "$HOME/.local/bin"
+
+# ── Output helpers ──────────────────────────────────────────────────
+
+section() { printf '\n\033[1;34m── %s ──\033[0m\n' "$1"; }
+ok()      { printf '  \033[32m+\033[0m %s\n' "$1"; }
+info()    { printf '  \033[2m>\033[0m %s\n' "$1"; }
+warn()    { printf '  \033[33m!\033[0m %s\n' "$1" >&2; }
+fail()    { printf '  \033[31mx\033[0m %s\n' "$1" >&2; }
 
 ask() {
-    printf '==== [%s/ASK] %s ====\n' "$SCRIPT_PREFIX" "$1"
-    read -r -p "[y/N]: " _r
+    printf '\n  \033[1m?\033[0m %s [y/N] ' "$1"
+    read -r _r
     [[ $_r =~ ^[Yy]$ ]]
 }
-note() { printf '==== [%s/%s] %s ====\n' "$SCRIPT_PREFIX" "$1" "$2"; }
-ok() { note OK "$1"; }
-warn() { note WARN "$1" >&2; }
-fail() { note FAIL "$1" >&2; }
-run_with_sudo() {
-    if command -v sudo >/dev/null 2>&1; then
-        sudo "$@"
-    else
-        "$@"
-    fi
-}
+
+# ── Helpers ─────────────────────────────────────────────────────────
 
 APT_UPDATED=0
 install_package() {
     local pkg="$1"
     if command -v apt-get >/dev/null 2>&1; then
         if [ "$APT_UPDATED" -eq 0 ]; then
-            note INFO "Updating apt package index"
-            if run_with_sudo apt-get update; then
-                APT_UPDATED=1
-            else
-                warn "apt-get update failed"
-                return 1
-            fi
+            info "Updating apt package index"
+            if sudo apt-get update -qq; then APT_UPDATED=1; else warn "apt-get update failed"; return 1; fi
         fi
-        note INFO "Installing $pkg via apt-get"
-        run_with_sudo apt-get install -y "$pkg"
-        return $?
+        info "Installing $pkg via apt"
+        sudo apt-get install -y -qq "$pkg"
     elif command -v dnf >/dev/null 2>&1; then
-        note INFO "Installing $pkg via dnf"
-        run_with_sudo dnf install -y "$pkg"
-        return $?
-    elif command -v yum >/dev/null 2>&1; then
-        note INFO "Installing $pkg via yum"
-        run_with_sudo yum install -y "$pkg"
-        return $?
+        sudo dnf install -y "$pkg"
     elif command -v pacman >/dev/null 2>&1; then
-        note INFO "Installing $pkg via pacman"
-        run_with_sudo pacman -S --needed --noconfirm "$pkg"
-        return $?
+        sudo pacman -S --needed --noconfirm "$pkg"
     elif command -v brew >/dev/null 2>&1; then
-        note INFO "Installing $pkg via brew"
         brew install "$pkg"
-        return $?
+    else
+        warn "No supported package manager found"; return 1
     fi
-    warn "No supported package manager available to install $pkg"
-    return 1
-}
-
-skip_if_verified() {
-    local component="$1"
-    shift
-    if [ "$CHECK_EXISTING" -eq 1 ] && [ $# -gt 0 ]; then
-        if "$@"; then
-            ok "$component already installed (verified) -> skip"
-            return 0
-        else
-            warn "$component installed but verification failed; reinstalling"
-            return 1
-        fi
-    fi
-    ok "$component already installed -> skip"
-    return 0
 }
 
 sync_config() {
-    local src="$1"
-    local dst="$2"
-    local label="${3:-config}"
+    local src="$1" dst="$2" label="${3:-config}"
     if [ ! -f "$src" ]; then
-        warn "$label source missing -> $src"
+        warn "$label: source missing ($src)"
         return 1
     fi
-    local dst_dir
-    dst_dir="$(dirname "$dst")"
-    [ -d "$dst_dir" ] || mkdir -p "$dst_dir"
+    mkdir -p "$(dirname "$dst")"
     if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
-        ok "$label already up to date -> $dst"
+        ok "$label: already up to date"
         return 0
     fi
     if [ -f "$dst" ]; then
         local backup="${dst}.bak-$(date +%s)"
-        if cp "$dst" "$backup"; then
-            note INFO "Backup created for $label -> $backup"
+        cp "$dst" "$backup" && info "$label: backed up to $backup"
+    fi
+    cp "$src" "$dst" && ok "$label: synced -> $dst"
+}
+
+skip_if_installed() {
+    local name="$1"; shift
+    if [ "$CHECK_EXISTING" -eq 1 ] && [ $# -gt 0 ]; then
+        if "$@" >/dev/null 2>&1; then
+            ok "$name: already installed (verified)"
+            return 0
         else
-            warn "Failed to backup $label -> $dst"
+            warn "$name: installed but verification failed"
+            return 1
         fi
     fi
-    if cp "$src" "$dst"; then
-        ok "$label synced -> $dst"
-        return 0
-    fi
-    warn "Failed to copy $label -> $dst"
-    return 1
+    ok "$name: already installed"
+    return 0
 }
 
 is_ubuntu() {
-    if [ -r /etc/os-release ]; then
-        if grep -Eq '^ID="?ubuntu"?$' /etc/os-release; then
-            return 0
-        fi
-        if grep -Eq '^ID_LIKE=.*ubuntu' /etc/os-release; then
-            return 0
-        fi
-    fi
-    return 1
+    [ -r /etc/os-release ] && grep -qE '^ID="?ubuntu"?$|^ID_LIKE=.*ubuntu' /etc/os-release
 }
 
-ensure_ubuntu_zshenv() {
-    if ! is_ubuntu; then
-        return 0
-    fi
-    local zshenv="$HOME/.zshenv"
-    note INFO "Ubuntu detected -> ensuring skip_global_compinit=1 in $zshenv"
-    if [ -f "$zshenv" ] && grep -qx 'skip_global_compinit=1' "$zshenv"; then
-        ok "$zshenv already sets skip_global_compinit=1"
-        return 0
-    fi
-    if [ -f "$zshenv" ]; then
-        local backup="${zshenv}.bak-$(date +%s)"
-        if cp "$zshenv" "$backup"; then
-            note INFO "Backup created for zshenv -> $backup"
-        else
-            warn "Failed to backup existing $zshenv"
-        fi
-    fi
-    if printf 'skip_global_compinit=1\n' > "$zshenv"; then
-        ok "Configured skip_global_compinit=1 in $zshenv"
-        return 0
-    fi
-    warn "Failed to update $zshenv"
-    return 1
-}
+# ── 1. ZSH + ZIMFW ─────────────────────────────────────────────────
 
-# MICRO -----------------------------------------------------------------
-micro_dir="$INSTALL_DIR/micro"
-if [ -e "$micro_dir" ] && [ ! -d "$micro_dir" ]; then
-    mv "$micro_dir" "${micro_dir}.old-$(date +%s)" || true
-fi
-micro_skip=0
-if [ -d "$micro_dir" ] && [ -x "$micro_dir/micro" ]; then
-    if skip_if_verified "micro" "$micro_dir/micro" --version; then
-        micro_skip=1
-    fi
-fi
-if [ "$micro_skip" -eq 0 ]; then
-    if ask "Install micro editor?"; then
-        mkdir -p "$micro_dir" || true
-        if ( cd "$micro_dir" && curl -fsSL --retry 3 --retry-delay 2 https://getmic.ro | bash ); then
-            ln -sfn "$micro_dir/micro" "$HOME/bin/micro" || true
-            ok "micro installed"
-        else
-            fail "micro install failed"
-        fi
-    else
-        warn "micro skipped by user"
-    fi
-fi
+section "Zsh + Zimfw"
 
-# ZSH -------------------------------------------------------------------
-zsh_cfg="$HOME/.zshrc"
-zsh_skip=0
 if command -v zsh >/dev/null 2>&1; then
-    if skip_if_verified "zsh" zsh --version; then
-        zsh_skip=1
-    fi
-fi
-if [ "$zsh_skip" -eq 0 ]; then
-    if ask "Install zsh shell via package manager?"; then
-        if install_package zsh; then
-            ok "zsh installed"
-        else
-            warn "zsh installation failed"
-        fi
+    skip_if_installed "zsh" zsh --version
+else
+    if ask "Install zsh?"; then
+        install_package zsh && ok "zsh installed" || fail "zsh install failed"
     else
-        warn "zsh installation declined"
-    fi
-fi
-sync_config "$REPO_ROOT_DIR/.zshrc" "$zsh_cfg" "zsh rc"
-sync_config "$REPO_ROOT_DIR/.zimrc" "$HOME/.zimrc" "zim config"
-ensure_ubuntu_zshenv
-
-# RANGER ----------------------------------------------------------------
-ranger_cfg="$HOME/.config/ranger"
-ranger_skip=0
-if command -v ranger >/dev/null 2>&1 && [ -d "$ranger_cfg" ]; then
-    if skip_if_verified "ranger" ranger --version; then
-        ranger_skip=1
-    fi
-fi
-if [ "$ranger_skip" -eq 0 ]; then
-    if ask "Install ranger (pipx)?"; then
-        if ! command -v pipx >/dev/null 2>&1; then
-            warn "pipx not detected. Install pipx (https://pipx.pypa.io) and re-run (ranger skipped)"
-        else
-            if pipx install --force ranger-fm; then
-                ok "ranger installed via pipx"
-                [ -d "$ranger_cfg" ] || mkdir -p "$ranger_cfg"
-                cp -a "$REPO_ROOT_DIR/ranger/"* "$ranger_cfg/" || true
-            else
-                warn "pipx ranger install failed"
-            fi
-        fi
-    else
-        warn "ranger skipped by user"
+        warn "zsh: skipped"
     fi
 fi
 
-# CARGO (on-demand) -----------------------------------------------------
-ensure_cargo() {
-    if command -v cargo >/dev/null 2>&1; then return 0; fi
-    if ask "Install Rust toolchain (cargo)?"; then
-        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
-            # shellcheck disable=SC1091
-            [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-            if command -v cargo >/dev/null 2>&1; then
-                ok "cargo installed"
-                return 0
-            else
-                fail "cargo install failed"
-                return 1
-            fi
-        else
-            fail "cargo install failed (network or script error)"
-            return 1
-        fi
+# Ubuntu needs skip_global_compinit to avoid conflict with zimfw
+if is_ubuntu; then
+    local_zshenv="$HOME/.zshenv"
+    if [ -f "$local_zshenv" ] && grep -qx 'skip_global_compinit=1' "$local_zshenv"; then
+        ok "zshenv: skip_global_compinit already set"
     else
-        warn "cargo install declined"
-        return 1
-    fi
-}
-
-# ZELLIJ ----------------------------------------------------------------
-zellij_cfg="$HOME/.config/zellij"
-zellij_skip=0
-if command -v zellij >/dev/null 2>&1 && [ -f "$zellij_cfg/config.kdl" ]; then
-    if skip_if_verified "zellij" zellij --version; then
-        zellij_skip=1
-    fi
-fi
-if [ "$zellij_skip" -eq 0 ]; then
-    if ask "Install zellij (cargo)?"; then
-        if command -v cargo >/dev/null 2>&1 || ensure_cargo; then
-            if cargo install --locked zellij; then ok "zellij installed"; else warn "cargo zellij install failed"; fi
-        else
-            warn "Skipping zellij (cargo unavailable)"
-        fi
-        [ -d "$zellij_cfg" ] || mkdir -p "$zellij_cfg"
-        cp -a "$REPO_ROOT_DIR/.config/zellij/config.kdl" "$zellij_cfg/config.kdl" || true
-    else
-        warn "zellij skipped by user"
+        info "Ubuntu detected: setting skip_global_compinit=1"
+        sync_config "$REPO_ROOT/.zshenv" "$local_zshenv" "zshenv"
     fi
 fi
 
-# STARSHIP ---------------------------------------------------------------
-starship_cfg="$HOME/.config/starship.toml"
-starship_skip=0
+# ── 2. STARSHIP ─────────────────────────────────────────────────────
+
+section "Starship prompt"
+
 if command -v starship >/dev/null 2>&1; then
-    if skip_if_verified "starship" starship --version; then
-        starship_skip=1
-    fi
-fi
-if [ "$starship_skip" -eq 0 ]; then
+    skip_if_installed "starship" starship --version
+else
     if ask "Install starship prompt?"; then
         tmp=/tmp/starship-inst.sh
-        if curl -fsSL --retry 3 --retry-delay 2 https://starship.rs/install.sh -o "$tmp" && chmod +x "$tmp" && "$tmp" -y -b "$HOME/.local/bin"; then
-            ok "starship installed"
+        if curl -fsSL --retry 3 https://starship.rs/install.sh -o "$tmp" && chmod +x "$tmp"; then
+            "$tmp" -y -b "$HOME/.local/bin" && ok "starship installed" || fail "starship install failed"
         else
-            warn "starship install failed"
+            fail "starship: download failed"
         fi
     else
-        warn "starship skipped by user"
-    fi
-fi
-sync_config "$REPO_ROOT_DIR/starship.toml" "$starship_cfg" "starship config"
-
-# ALIASES / SCRIPTS -----------------------------------------------------
-alias_src="$REPO_ROOT_DIR/alias_scripts"
-alias_dst="$INSTALL_DIR/scripts"
-aliases_ready=0
-if [ -d "$alias_dst" ]; then
-    if skip_if_verified "scripts" test -x "$alias_dst/rng"; then
-        aliases_ready=1
-    fi
-fi
-if [ "$aliases_ready" -eq 0 ]; then
-    if [ -d "$alias_src" ]; then
-        mkdir -p "$alias_dst"
-        cp -a "$alias_src/"* "$alias_dst/" || true
-        chmod +x "$alias_dst/"* 2>/dev/null || true
-        ok "scripts copied -> $alias_dst"
+        warn "starship: skipped"
     fi
 fi
 
-# DOTFILES ---------------------------------------------------------------
-sync_config "$REPO_ROOT_DIR/.zshenv"                    "$HOME/.zshenv"                    "zsh env"
-sync_config "$REPO_ROOT_DIR/.gitconfig"                 "$HOME/.gitconfig"                 "gitconfig"
-sync_config "$REPO_ROOT_DIR/.condarc"                   "$HOME/.condarc"                   "conda config"
-sync_config "$REPO_ROOT_DIR/.config/git/ignore"         "$HOME/.config/git/ignore"         "global gitignore"
-sync_config "$REPO_ROOT_DIR/.config/micro/bindings.json" "$HOME/.config/micro/bindings.json" "micro bindings"
+# ── 3. FRESH EDITOR ─────────────────────────────────────────────────
 
-# CLAUDE CODE ------------------------------------------------------------
-sync_config "$REPO_ROOT_DIR/.claude/settings.json"       "$HOME/.claude/settings.json"       "claude settings"
-sync_config "$REPO_ROOT_DIR/.claude/settings.local.json" "$HOME/.claude/settings.local.json" "claude local settings"
-sync_config "$REPO_ROOT_DIR/.claude/statusline-command.sh" "$HOME/.claude/statusline-command.sh" "claude statusline"
-sync_config "$REPO_ROOT_DIR/.claude/hooks/approve-safe-bash.sh"    "$HOME/.claude/hooks/approve-safe-bash.sh"    "claude hook: approve-safe-bash"
-sync_config "$REPO_ROOT_DIR/.claude/hooks/show-diff-after-edit.sh" "$HOME/.claude/hooks/show-diff-after-edit.sh" "claude hook: show-diff-after-edit"
-sync_config "$REPO_ROOT_DIR/.claude/hooks/notify.sh"               "$HOME/.claude/hooks/notify.sh"               "claude hook: notify"
-chmod +x "$HOME/.claude/statusline-command.sh" "$HOME/.claude/hooks/"*.sh 2>/dev/null || true
-# Patch hardcoded /home/nfedik paths to current user
-if grep -q '/home/nfedik/' "$HOME/.claude/settings.json" 2>/dev/null; then
-    sed -i "s|/home/nfedik/|$HOME/|g" "$HOME/.claude/settings.json"
-    ok "claude settings: patched home paths to $HOME"
+section "Fresh editor"
+
+if command -v fresh >/dev/null 2>&1; then
+    ok "fresh: found at $(command -v fresh)"
+else
+    warn "fresh: not found"
+    info "Install with: sudo apt install fresh-editor"
+    info "Or check: https://sinelaw.github.io/fresh/"
 fi
+
+# ── 4. ZELLIJ (optional) ────────────────────────────────────────────
+
+section "Zellij (optional)"
+
+if command -v zellij >/dev/null 2>&1; then
+    skip_if_installed "zellij" zellij --version
+else
+    info "Zellij is a terminal multiplexer (like tmux). Skip if you don't need one."
+    if ask "Install zellij via cargo? (slow, ~5min compile)"; then
+        if command -v cargo >/dev/null 2>&1; then
+            cargo install --locked zellij && ok "zellij installed" || fail "zellij: cargo install failed"
+        else
+            info "Cargo not found. Install Rust first: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            warn "zellij: skipped (no cargo)"
+        fi
+    else
+        warn "zellij: skipped"
+    fi
+fi
+
+# Sync zellij config if installed
+if command -v zellij >/dev/null 2>&1; then
+    sync_config "$REPO_ROOT/.config/zellij/config.kdl" "$HOME/.config/zellij/config.kdl" "zellij config"
+fi
+
+# ── 5. DOTFILES ──────────────────────────────────────────────────────
+
+section "Dotfiles"
+
+sync_config "$REPO_ROOT/.zshrc"            "$HOME/.zshrc"            "zshrc"
+sync_config "$REPO_ROOT/.zimrc"            "$HOME/.zimrc"            "zimrc"
+sync_config "$REPO_ROOT/.zshenv"           "$HOME/.zshenv"           "zshenv"
+sync_config "$REPO_ROOT/.gitconfig"        "$HOME/.gitconfig"        "gitconfig"
+sync_config "$REPO_ROOT/.condarc"          "$HOME/.condarc"          "condarc"
+sync_config "$REPO_ROOT/starship.toml"     "$HOME/.config/starship.toml"  "starship config"
+sync_config "$REPO_ROOT/.config/git/ignore" "$HOME/.config/git/ignore"    "global gitignore"
+
+# Patch hardcoded /home/nfedik/ paths to current user
+if [ "$HOME" != "/home/nfedik" ]; then
+    for f in "$HOME/.zshrc" "$HOME/.gitconfig"; do
+        if grep -q '/home/nfedik/' "$f" 2>/dev/null; then
+            sed -i "s|/home/nfedik/|$HOME/|g" "$f"
+            info "Patched home paths in $(basename "$f")"
+        fi
+    done
+fi
+
+# ── TIPS ──────────────────────────────────────────────────────────────
+
+section "Done"
 
 printf '\n'
-note INFO "Done. Suggested PATH addition:"
-note INFO "  export PATH=\"$HOME/bin:$HOME/.local/bin:$alias_dst:\$PATH\""
+printf '  \033[1mTools\033[0m\n'
+printf '  %-12s %s\n' "fresh"    "Terminal editor (EDITOR/VISUAL are set in .zshrc)"
+printf '  %-12s %s\n' "starship" "Prompt theme   (config: ~/.config/starship.toml)"
+printf '  %-12s %s\n' "zimfw"    "Zsh plugins    (update: zimfw update)"
+if command -v zellij >/dev/null 2>&1; then
+printf '  %-12s %s\n' "zellij"   "Multiplexer    (start: zellij, lock mode: Ctrl+g)"
+fi
+printf '\n'
+printf '  \033[1mPATH\033[0m (already in .zshrc):\n'
+printf '  export PATH="$HOME/bin:$HOME/.local/bin:$HOME/soft:$PATH"\n'
 printf '\n'
