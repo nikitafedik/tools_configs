@@ -59,6 +59,7 @@ fi
 # Initialize modules.
 source ${ZIM_HOME}/init.zsh
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=238'
+zle_highlight+=(paste:none)
 
 # === Prompt ===
 precmd () { echo -n "\x1b]1337;CurrentDir=$(pwd)\x07" }
@@ -98,3 +99,9 @@ export NVM_DIR="$HOME/.nvm"
 
 # Local env
 [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+
+# Local aliases
+[ -f "$HOME/.zsh_aliases" ] && source "$HOME/.zsh_aliases"
+
+# Tmux pane command status markers
+[ -f "$HOME/.local/bin/tmux-ergo-pane-status.zsh" ] && source "$HOME/.local/bin/tmux-ergo-pane-status.zsh"

@@ -91,6 +91,11 @@ sync_config() {
     cp "$src" "$dst" && ok "$label: synced -> $dst"
 }
 
+sync_executable() {
+    local src="$1" dst="$2" label="${3:-script}"
+    sync_config "$src" "$dst" "$label" && chmod +x "$dst"
+}
+
 skip_if_installed() {
     local name="$1"; shift
     if [ "$CHECK_EXISTING" -eq 1 ] && [ $# -gt 0 ]; then
@@ -191,11 +196,54 @@ if command -v zellij >/dev/null 2>&1; then
     sync_config "$REPO_ROOT/.config/zellij/config.kdl" "$HOME/.config/zellij/config.kdl" "zellij config"
 fi
 
-# ── 5. DOTFILES ──────────────────────────────────────────────────────
+# ── 5. TMUX ──────────────────────────────────────────────────────────
+
+section "Tmux"
+
+if command -v tmux >/dev/null 2>&1; then
+    skip_if_installed "tmux" tmux -V
+else
+    if ask "Install tmux?"; then
+        install_package tmux && ok "tmux installed" || fail "tmux install failed"
+    else
+        warn "tmux: skipped"
+    fi
+fi
+
+sync_config "$REPO_ROOT/tmux.conf" "$HOME/.tmux.conf" "tmux config"
+sync_executable "$REPO_ROOT/.local/bin/tmux-ergo-pane-status" "$HOME/.local/bin/tmux-ergo-pane-status" "tmux pane status"
+sync_executable "$REPO_ROOT/.local/bin/tmux-ergo-pane-status.zsh" "$HOME/.local/bin/tmux-ergo-pane-status.zsh" "tmux pane zsh hook"
+sync_executable "$REPO_ROOT/.local/bin/tmux-ergo-spinner-loop" "$HOME/.local/bin/tmux-ergo-spinner-loop" "tmux spinner loop"
+
+if command -v tmux >/dev/null 2>&1; then
+    if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
+        info "tmux plugin manager is not installed"
+        if ask "Install tpm for tmux plugins?"; then
+            if command -v git >/dev/null 2>&1; then
+                git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm" \
+                    && ok "tpm installed" || fail "tpm install failed"
+            else
+                warn "git not found; cannot install tpm"
+            fi
+        fi
+    else
+        ok "tpm: already installed"
+    fi
+
+    if [ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]; then
+        if ask "Install/update tmux plugins from tmux.conf?"; then
+            "$HOME/.tmux/plugins/tpm/bin/install_plugins" || warn "tmux plugin install returned non-zero"
+        fi
+    fi
+fi
+
+# ── 6. DOTFILES ──────────────────────────────────────────────────────
 
 section "Dotfiles"
 
 sync_config "$REPO_ROOT/.zshrc"            "$HOME/.zshrc"            "zshrc"
+sync_config "$REPO_ROOT/.zsh_aliases"      "$HOME/.zsh_aliases"      "zsh aliases"
+sync_config "$REPO_ROOT/.bash_aliases"     "$HOME/.bash_aliases"     "bash aliases"
 sync_config "$REPO_ROOT/.zimrc"            "$HOME/.zimrc"            "zimrc"
 sync_config "$REPO_ROOT/.zshenv"           "$HOME/.zshenv"           "zshenv"
 sync_config "$REPO_ROOT/.gitconfig"        "$HOME/.gitconfig"        "gitconfig"
@@ -203,9 +251,14 @@ sync_config "$REPO_ROOT/.condarc"          "$HOME/.condarc"          "condarc"
 sync_config "$REPO_ROOT/starship.toml"     "$HOME/.config/starship.toml"  "starship config"
 sync_config "$REPO_ROOT/.config/git/ignore" "$HOME/.config/git/ignore"    "global gitignore"
 
+sync_executable "$REPO_ROOT/.local/bin/codex-plot-preview" "$HOME/.local/bin/codex-plot-preview" "codex plot preview"
+sync_executable "$REPO_ROOT/.local/bin/codex-plot-preview-terminal" "$HOME/.local/bin/codex-plot-preview-terminal" "codex plot terminal preview"
+sync_config "$REPO_ROOT/.local/bin/codex-plot-preview-windows.ps1" "$HOME/.local/bin/codex-plot-preview-windows.ps1" "codex plot Windows preview"
+sync_config "$REPO_ROOT/.local/bin/codex-plot-preview-sixel.ps1" "$HOME/.local/bin/codex-plot-preview-sixel.ps1" "codex plot sixel preview"
+
 # Patch hardcoded /home/nfedik/ paths to current user
 if [ "$HOME" != "/home/nfedik" ]; then
-    for f in "$HOME/.zshrc" "$HOME/.gitconfig"; do
+    for f in "$HOME/.zshrc" "$HOME/.gitconfig" "$HOME/.tmux.conf"; do
         if grep -q '/home/nfedik/' "$f" 2>/dev/null; then
             sed -i "s|/home/nfedik/|$HOME/|g" "$f"
             info "Patched home paths in $(basename "$f")"
@@ -225,6 +278,10 @@ printf '  %-12s %s\n' "zimfw"    "Zsh plugins    (update: zimfw update)"
 if command -v zellij >/dev/null 2>&1; then
 printf '  %-12s %s\n' "zellij"   "Multiplexer    (start: zellij, lock mode: Ctrl+g)"
 fi
+if command -v tmux >/dev/null 2>&1; then
+printf '  %-12s %s\n' "tmux"     "Multiplexer    (config: ~/.tmux.conf, plugins: ~/.tmux/plugins/tpm)"
+fi
+printf '  %-12s %s\n' "preview"  "Plot helper    (run: codex-plot-preview IMAGE --powershell)"
 printf '\n'
 printf '  \033[1mPATH\033[0m (already in .zshrc):\n'
 printf '  export PATH="$HOME/bin:$HOME/.local/bin:$HOME/soft:$PATH"\n'

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'exit 0' TERM INT
+
+lock="${TMPDIR:-/tmp}/tmux-ergo-spinner-${UID:-$(id -u)}.lock"
+exec 9>"$lock"
+flock -n 9 || exit 0
+
+frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+index=0
+interval="${TMUX_ERGO_SPINNER_INTERVAL:-0.1}"
+refresh_every="${TMUX_ERGO_SPINNER_REFRESH_EVERY:-2}"
+[[ "$refresh_every" =~ ^[1-9][0-9]*$ ]] || refresh_every=2
+tick=0
+
+while tmux has-session >/dev/null 2>&1; do
+  if ((tick == 0)); then
+    tmux set-option -gq @ergo_process_spinner "${frames[$index]} "
+    while IFS= read -r client; do
+      [[ -n "$client" ]] && tmux refresh-client -S -t "$client" >/dev/null 2>&1 || true
+    done < <(tmux list-clients -F '#{client_name}' 2>/dev/null || true)
+  fi
+  index=$(((index + 1) % ${#frames[@]}))
+  tick=$(((tick + 1) % refresh_every))
+  sleep "$interval"
+done

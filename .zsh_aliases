@@ -1,0 +1,19 @@
+# Local aliases loaded by ~/.zshrc
+alias cbg='python3 ~/.codex/plugins/codex-bg-supervisor/scripts/codex_bg.py'
+alias cbgls='python3 ~/.codex/plugins/codex-bg-supervisor/scripts/codex_bg.py list'
+alias cbgs='python3 ~/.codex/plugins/codex-bg-supervisor/scripts/codex_bg.py status'
+alias tmls='python3 ~/.codex/plugins/tmux-tracker/scripts/tmux_tracker.py list'
+alias cbgps='python3 ~/.codex/plugins/codex-bg-supervisor/scripts/codex_bg.py ps'
+
+# Modern terminal tools
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons=auto --group-directories-first'
+  alias ll='eza --icons=auto --group-directories-first --git -lah'
+  alias la='eza --icons=auto --group-directories-first -a'
+  alias l='eza --icons=auto --group-directories-first -F'
+  alias lt='eza --icons=auto --group-directories-first --tree --level=2'
+fi
+
+if command -v bat >/dev/null 2>&1; then
+  alias cat='bat --paging=never'
+fi

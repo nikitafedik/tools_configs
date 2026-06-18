@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: codex-plot-preview IMAGE [--title TITLE] [--mode auto|powershell|float|terminal|inline|symbols] [--wait] [--hold SECONDS]\n' >&2
+}
+
+if [[ $# -lt 1 || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+image=$1
+shift || true
+title=
+mode=${CODEX_PLOT_PREVIEW_MODE:-auto}
+wait_for_close=0
+hold_seconds=
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --wait)
+      wait_for_close=1
+      ;;
+    --no-wait)
+      wait_for_close=0
+      ;;
+    --hold)
+      shift
+      if [[ $# -eq 0 || ! "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        usage
+        exit 2
+      fi
+      hold_seconds=$1
+      ;;
+    --mode)
+      shift
+      if [[ $# -eq 0 || ! "$1" =~ ^(auto|powershell|float|terminal|inline|symbols)$ ]]; then
+        usage
+        exit 2
+      fi
+      mode=$1
+      ;;
+    --powershell)
+      mode=powershell
+      ;;
+    --float)
+      mode=powershell
+      ;;
+    --terminal)
+      mode=terminal
+      ;;
+    --inline)
+      mode=inline
+      ;;
+    --symbols)
+      mode=symbols
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --title)
+      shift
+      if [[ $# -eq 0 ]]; then
+        usage
+        exit 2
+      fi
+      title=$1
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+  shift || true
+done
+
+if [[ ! -f "$image" ]]; then
+  printf 'codex-plot-preview: not a file: %s\n' "$image" >&2
+  exit 1
+fi
+
+abs_image=$(realpath "$image")
+display_title=${title:-$(basename "$abs_image")}
+
+preview_float() {
+  if ! command -v wslpath >/dev/null 2>&1 || ! command -v powershell.exe >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local state_dir ps_script win_image win_state_dir win_ps_script
+  state_dir=${CODEX_PLOT_PREVIEW_STATE_DIR:-/tmp/codex-plot-preview}
+  ps_script=${CODEX_PLOT_PREVIEW_PS1:-$HOME/.local/bin/codex-plot-preview-windows.ps1}
+
+  mkdir -p "$state_dir"
+  win_image=$(wslpath -w "$abs_image")
+  win_state_dir=$(wslpath -w "$state_dir")
+  printf '%s\n' "$win_image" > "$state_dir/current_image.txt"
+  printf '%s\n' "$display_title" > "$state_dir/current_title.txt"
+
+  if [[ -f "$ps_script" ]]; then
+    win_ps_script=$(wslpath -w "$ps_script")
+    if command -v setsid >/dev/null 2>&1; then
+      setsid -f powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "$win_ps_script" -StateDir "$win_state_dir" -Title "$display_title" >/dev/null 2>&1
+    else
+      nohup powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "$win_ps_script" -StateDir "$win_state_dir" -Title "$display_title" >/dev/null 2>&1 &
+    fi
+  elif command -v explorer.exe >/dev/null 2>&1; then
+    explorer.exe "$win_image" >/dev/null 2>&1 &
+  else
+    return 1
+  fi
+
+  printf 'codex-plot-preview: PowerShell preview updated: %s\n' "$abs_image" >&2
+}
+
+preview_inline() {
+  local force_symbols=${1:-0}
+
+  if ! command -v chafa >/dev/null 2>&1; then
+    printf 'codex-plot-preview: chafa is not on PATH\n' >&2
+    return 1
+  fi
+
+  local features format render_cmd quoted_image quoted_title close_cmd popup_cmd passthrough
+  quoted_image=$(printf '%q' "$abs_image")
+  quoted_title=$(printf '%q' "$display_title")
+
+  features=
+  if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX:-}" ]]; then
+    features=$(tmux display-message -p '#{client_termfeatures}' 2>/dev/null || true)
+  fi
+
+  passthrough=
+  if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX:-}" ]]; then
+    passthrough="--passthrough=tmux"
+  fi
+
+  if [[ "$force_symbols" -eq 0 && "$features" == *sixel* ]]; then
+    format=sixels
+    render_cmd="chafa --format=sixels $passthrough --scale=max --fit-width --margin-bottom=2 $quoted_image"
+  else
+    format=symbols
+    render_cmd="chafa --format=symbols --symbols=block+border+space --scale=max --fit-width --margin-bottom=2 $quoted_image"
+  fi
+
+  if [[ -n "$hold_seconds" ]]; then
+    close_cmd="printf '\\nClosing in %s seconds...' $hold_seconds; sleep $hold_seconds"
+  else
+    close_cmd="printf '\\nPress Enter to close...'; IFS= read -r _"
+  fi
+
+  popup_cmd="printf '\\033]2;%s\\007' $quoted_title; printf 'Plot preview: %s (%s)\\n\\n' $quoted_title $format; $render_cmd; printf '\\n%s\\n' $quoted_image; $close_cmd"
+
+  if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX:-}" ]]; then
+    if [[ "$wait_for_close" -eq 1 ]]; then
+      tmux display-popup -E -w 92% -h 86% "$popup_cmd"
+    else
+      tmux display-popup -E -w 92% -h 86% "$popup_cmd" >/dev/null 2>&1 &
+    fi
+  else
+    printf 'Plot preview: %s (%s)\n\n' "$display_title" "$format"
+    if [[ "$format" == sixels ]]; then
+      chafa --format=sixels --scale=max --fit-width "$abs_image"
+    else
+      chafa --format=symbols --symbols=block+border+space --scale=max --fit-width "$abs_image"
+    fi
+  fi
+}
+
+preview_terminal() {
+  if ! command -v wt.exe >/dev/null 2>&1 || ! command -v wslpath >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local ps_script win_image win_ps_script win_powershell wt_window
+  ps_script=${CODEX_PLOT_PREVIEW_SIXEL_PS1:-$HOME/.local/bin/codex-plot-preview-sixel.ps1}
+  if [[ ! -f "$ps_script" ]]; then
+    return 1
+  fi
+
+  win_image=$(wslpath -w "$abs_image")
+  win_ps_script=$(wslpath -w "$ps_script")
+  win_powershell=${CODEX_PLOT_PREVIEW_POWERSHELL_EXE:-C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe}
+  wt_window=${CODEX_PLOT_PREVIEW_WT_WINDOW:-0}
+
+  local -a wt_cmd=(
+    wt.exe -w "$wt_window" new-tab --title "$display_title"
+    "$win_powershell" -NoProfile -ExecutionPolicy Bypass -File "$win_ps_script"
+    -ImagePath "$win_image" -Title "$display_title"
+  )
+
+  if [[ -n "$hold_seconds" ]]; then
+    wt_cmd+=(-HoldSeconds "$hold_seconds")
+  fi
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid -f "${wt_cmd[@]}" >/dev/null 2>&1
+  else
+    nohup "${wt_cmd[@]}" >/dev/null 2>&1 &
+  fi
+
+  printf 'codex-plot-preview: PowerShell terminal tab opened: %s\n' "$abs_image" >&2
+}
+
+case "$mode" in
+  auto)
+    preview_float
+    ;;
+  powershell|float)
+    preview_float
+    ;;
+  terminal)
+    preview_terminal
+    ;;
+  inline)
+    preview_inline
+    ;;
+  symbols)
+    preview_inline 1
+    ;;
+esac

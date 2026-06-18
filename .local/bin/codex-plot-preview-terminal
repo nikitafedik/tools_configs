@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image=${1:-}
+title=${2:-Codex plot preview}
+hold_seconds=${3:-}
+
+export PATH="$HOME/.local/bin:$HOME/.local/share/terminal-tools/bin:$PATH"
+
+if [[ -z "$image" || ! -f "$image" ]]; then
+  printf 'codex-plot-preview-terminal: missing image: %s\n' "$image" >&2
+  printf '\nPress Enter to close...'
+  IFS= read -r _ || true
+  exit 1
+fi
+
+printf '\033]0;%s\007' "$title"
+printf 'Codex plot preview: %s\n' "$title"
+printf '%s\n\n' "$image"
+
+if command -v chafa >/dev/null 2>&1; then
+  if [[ -n "${WT_SESSION:-}" ]]; then
+    chafa --format=sixels --scale=max --fit-width --margin-bottom=3 "$image" \
+      || chafa --format=symbols --symbols=block+border+space --scale=max --fit-width --margin-bottom=3 "$image"
+  else
+    chafa --format=symbols --symbols=block+border+space --scale=max --fit-width --margin-bottom=3 "$image"
+  fi
+else
+  printf 'chafa is not on PATH in this terminal.\n'
+fi
+
+printf '\n'
+if [[ -n "$hold_seconds" ]]; then
+  printf 'Closing in %s seconds...' "$hold_seconds"
+  sleep "$hold_seconds"
+else
+  printf 'Press Enter to close...'
+  IFS= read -r _ || true
+fi

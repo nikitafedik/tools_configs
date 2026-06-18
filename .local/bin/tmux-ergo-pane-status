@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+
+set -u
+
+green="#a6e3a1"
+yellow="#f9e2af"
+grey="#6c7086"
+black="#11111b"
+red="#f38ba8"
+blank="#45475a"
+
+status_dir() {
+  local base="${TMUX_ERGO_STATUS_DIR:-${XDG_RUNTIME_DIR:-/tmp}/tmux-ergo-pane-status-${UID:-$(id -u)}}"
+  mkdir -p "$base" 2>/dev/null || return 1
+  chmod 700 "$base" 2>/dev/null || true
+  printf '%s\n' "$base"
+}
+
+pane_key() {
+  local pane="${1:-${TMUX_PANE:-}}"
+  [[ -n "$pane" ]] || return 1
+  printf '%s\n' "${pane//[^A-Za-z0-9_.-]/_}"
+}
+
+state_file() {
+  local pane="${1:-${TMUX_PANE:-}}"
+  local dir key
+  dir="$(status_dir)" || return 1
+  key="$(pane_key "$pane")" || return 1
+  printf '%s/%s.state\n' "$dir" "$key"
+}
+
+now_epoch() {
+  date +%s
+}
+
+write_state() {
+  local pane="$1"
+  local state="$2"
+  local timestamp="$3"
+  local exit_code="${4:-}"
+  local file tmp
+  file="$(state_file "$pane")" || return 0
+  tmp="${file}.$$"
+  umask 077
+  {
+    printf 'pane=%s\n' "$pane"
+    printf 'state=%s\n' "$state"
+    printf 'updated_at=%s\n' "$timestamp"
+    [[ -n "$exit_code" ]] && printf 'exit_code=%s\n' "$exit_code"
+    true
+  } >"$tmp" && mv -f "$tmp" "$file"
+}
+
+read_state() {
+  local pane="$1"
+  local file key value
+  state=""
+  updated_at="0"
+  exit_code=""
+  file="$(state_file "$pane")" || return 1
+  [[ -r "$file" ]] || return 1
+  while IFS='=' read -r key value; do
+    case "$key" in
+      state) state="$value" ;;
+      updated_at) updated_at="$value" ;;
+      exit_code) exit_code="$value" ;;
+    esac
+  done <"$file"
+  [[ -n "$state" ]]
+}
+
+is_shell_command() {
+  case "${1:-}" in
+    bash|zsh|fish|sh|tmux|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+color_name_rank() {
+  case "$1" in
+    red) printf '50\n' ;;
+    green) printf '40\n' ;;
+    yellow) printf '30\n' ;;
+    grey) printf '20\n' ;;
+    black) printf '10\n' ;;
+    *) printf '0\n' ;;
+  esac
+}
+
+status_name_for_pane() {
+  local pane="$1"
+  local current_command="${2:-}"
+  local now="$3"
+  local age
+
+  if read_state "$pane"; then
+    case "$state" in
+      failed|blocked)
+        printf 'red\n'
+        return 0
+        ;;
+      running)
+        printf 'green\n'
+        return 0
+        ;;
+      needs_attention)
+        age=$((now - updated_at))
+        if ((age >= 86400)); then
+          printf 'black\n'
+        elif ((age >= 10800)); then
+          printf 'grey\n'
+        else
+          printf 'yellow\n'
+        fi
+        return 0
+        ;;
+      idle|done)
+        age=$((now - updated_at))
+        if ((age >= 86400)); then
+          printf 'black\n'
+        elif ((age >= 10800)); then
+          printf 'grey\n'
+        else
+          printf 'yellow\n'
+        fi
+        return 0
+        ;;
+    esac
+  fi
+
+  if is_shell_command "$current_command"; then
+    printf 'blank\n'
+  else
+    printf 'yellow\n'
+  fi
+}
+
+render_marker() {
+  case "$1" in
+    red) printf '#[fg=%s]● ' "$red" ;;
+    green) printf '#[fg=%s]● ' "$green" ;;
+    yellow) printf '#[fg=%s]● ' "$yellow" ;;
+    grey) printf '#[fg=%s]● ' "$grey" ;;
+    black) printf '#[fg=%s]● ' "$black" ;;
+    *) printf '#[fg=%s]● ' "$blank" ;;
+  esac
+}
+
+render_color() {
+  local fallback="${2:-$blank}"
+  case "$1" in
+    red) printf '%s\n' "$red" ;;
+    green) printf '%s\n' "$green" ;;
+    yellow) printf '%s\n' "$yellow" ;;
+    grey) printf '%s\n' "$grey" ;;
+    black) printf '%s\n' "$black" ;;
+    *) printf '%s\n' "$fallback" ;;
+  esac
+}
+
+cmd_start() {
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 0
+  write_state "$TMUX_PANE" "running" "$(now_epoch)"
+}
+
+cmd_finish() {
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 0
+  local code="${1:-0}"
+  read_state "$TMUX_PANE" || return 0
+  [[ "$state" == "running" ]] || return 0
+  if [[ "$code" == "0" ]]; then
+    write_state "$TMUX_PANE" "idle" "$(now_epoch)" "$code"
+  else
+    write_state "$TMUX_PANE" "failed" "$(now_epoch)" "$code"
+  fi
+}
+
+cmd_mark() {
+  [[ -n "${TMUX_PANE:-}" ]] || return 0
+  case "${1:-}" in
+    running|idle|done|failed|blocked|needs_attention)
+      write_state "$TMUX_PANE" "$1" "$(now_epoch)" "${2:-}"
+      ;;
+    clear)
+      local file
+      file="$(state_file "$TMUX_PANE")" || return 0
+      rm -f "$file"
+      ;;
+  esac
+}
+
+cmd_render_pane() {
+  local pane="${1:-}"
+  local current_command="${2:-}"
+  local now status
+  [[ -n "$pane" ]] || {
+    render_marker blank
+    return 0
+  }
+  now="$(now_epoch)"
+  status="$(status_name_for_pane "$pane" "$current_command" "$now")"
+  render_marker "$status"
+}
+
+cmd_color_pane() {
+  local pane="${1:-}"
+  local current_command="${2:-}"
+  local fallback="${3:-$blank}"
+  local now status
+  [[ -n "$pane" ]] || {
+    render_color blank "$fallback"
+    return 0
+  }
+  now="$(now_epoch)"
+  status="$(status_name_for_pane "$pane" "$current_command" "$now")"
+  render_color "$status" "$fallback"
+}
+
+cmd_render_window() {
+  local window="${1:-}"
+  local fallback_pane="${2:-}"
+  local fallback_command="${3:-}"
+  local now pane command status rank best best_rank
+
+  now="$(now_epoch)"
+  best="blank"
+  best_rank=0
+
+  if [[ -n "$window" ]] && command -v tmux >/dev/null 2>&1; then
+    while IFS=$'\t' read -r pane command; do
+      [[ -n "$pane" ]] || continue
+      status="$(status_name_for_pane "$pane" "$command" "$now")"
+      rank="$(color_name_rank "$status")"
+      if ((rank > best_rank)); then
+        best="$status"
+        best_rank="$rank"
+      fi
+    done < <(tmux list-panes -t "$window" -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
+  fi
+
+  if ((best_rank == 0)) && [[ -n "$fallback_pane" ]]; then
+    best="$(status_name_for_pane "$fallback_pane" "$fallback_command" "$now")"
+  fi
+
+  render_marker "$best"
+}
+
+cmd_color_window() {
+  local window="${1:-}"
+  local fallback_pane="${2:-}"
+  local fallback_command="${3:-}"
+  local fallback_color="${4:-$blank}"
+  local now pane command status rank best best_rank
+
+  now="$(now_epoch)"
+  best="blank"
+  best_rank=0
+
+  if [[ -n "$window" ]] && command -v tmux >/dev/null 2>&1; then
+    while IFS=$'\t' read -r pane command; do
+      [[ -n "$pane" ]] || continue
+      status="$(status_name_for_pane "$pane" "$command" "$now")"
+      rank="$(color_name_rank "$status")"
+      if ((rank > best_rank)); then
+        best="$status"
+        best_rank="$rank"
+      fi
+    done < <(tmux list-panes -t "$window" -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
+  fi
+
+  if ((best_rank == 0)) && [[ -n "$fallback_pane" ]]; then
+    best="$(status_name_for_pane "$fallback_pane" "$fallback_command" "$now")"
+  fi
+
+  render_color "$best" "$fallback_color"
+}
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  finish) shift; cmd_finish "$@" ;;
+  mark) shift; cmd_mark "$@" ;;
+  render-pane) shift; cmd_render_pane "$@" ;;
+  render-window) shift; cmd_render_window "$@" ;;
+  color-pane) shift; cmd_color_pane "$@" ;;
+  color-window) shift; cmd_color_window "$@" ;;
+  *) render_marker blank ;;
+esac

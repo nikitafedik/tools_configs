@@ -3,3 +3,13 @@
 [user]
 	name = Nikita Fedik
 	email = nfedik@nvidia.com
+[credential "https://github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+[core]
+	hooksPath = /home/nfedik/.config/git/hooks
+[safe]
+	directory = /mnt/c/test
